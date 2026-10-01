@@ -1,0 +1,956 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AlgoGuard AI — Semantic Deduplicator & Problem Safety Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+:root{--bg:#0c1220;--panel:#131b2e;--panel2:#18213a;--line:#243049;--ink:#e7ecf7;--mute:#8c9ab8;--acc:#7c9cff;--ok:#3ddc97;--warn:#f5c451;--bad:#ff6b6b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+[hidden]{display:none!important}
+html{scroll-padding-top:env(safe-area-inset-top,0px);color-scheme:dark}
+body{background:var(--bg);color:var(--ink);font-family:'IBM Plex Sans',system-ui,sans-serif;margin:0}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px}
+.inset{background:var(--panel2);border:1px solid var(--line);border-radius:6px}
+.mute{color:var(--mute)}
+.btn{background:var(--acc);color:#0c1220;font-weight:600;border-radius:6px;padding:.5rem .9rem;font-size:.875rem}
+.btn:hover{filter:brightness(1.1)}
+.ghost{border:1px solid var(--line);border-radius:6px;padding:.4rem .7rem;font-size:.8rem;color:var(--ink)}
+.ghost:hover{border-color:var(--acc)}
+.chip{display:inline-block;border:1px solid var(--line);border-radius:4px;padding:1px 7px;font-size:.75rem;margin:2px 3px 2px 0}
+.chip.on{border-color:var(--acc);color:var(--acc)}
+.tab{padding:.6rem 1rem;border-bottom:2px solid transparent;color:var(--mute);white-space:nowrap;font-weight:500}
+.tab[aria-selected=true]{color:var(--ink);border-color:var(--acc)}
+input,textarea,select{background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);padding:.45rem .6rem;font-size:.875rem;width:100%}
+textarea{font-family:'IBM Plex Mono',monospace;font-size:.8rem;line-height:1.5}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+th{text-align:left;font-weight:500;color:var(--mute);font-size:.75rem;padding:.5rem .6rem;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:.5rem .6rem;border-bottom:1px solid var(--line);font-size:.85rem;vertical-align:top}
+.scroll-x{overflow-x:auto}
+@media (prefers-reduced-motion:no-preference){.ring{transition:stroke-dashoffset .9s ease,stroke .3s}}
+</style>
+</head>
+<body>
+<header class="border-b" style="border-color:var(--line)">
+  <div class="max-w-6xl mx-auto px-4 pt-4">
+    <div class="flex flex-wrap items-baseline gap-x-3">
+      <h1 class="text-xl font-semibold">AlgoGuard AI</h1>
+      <p class="mute text-sm">Semantic deduplicator and problem safety engine for contest coordinators</p>
+    </div>
+    <nav class="flex overflow-x-auto mt-2" role="tablist" id="tabs"></nav>
+  </div>
+</header>
+<main class="max-w-6xl mx-auto px-4 py-5">
+  <section id="v-inspect"></section>
+  <section id="v-pool" hidden></section>
+  <section id="v-dash" hidden></section>
+</main>
+<div id="modal" hidden class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(5,8,16,.75)">
+  <div class="card w-full max-w-2xl p-4 max-h-[85vh] flex flex-col">
+    <div class="flex justify-between items-center mb-2"><h3 class="font-semibold">Contest problem set safety report</h3><button class="ghost" id="mclose">Close</button></div>
+    <pre id="rep" class="inset mono text-xs p-3 overflow-auto whitespace-pre-wrap flex-1"></pre>
+    <div class="mt-3 flex gap-2 items-center"><button class="btn" id="mcopy">Copy report</button><span id="mmsg" class="mute text-xs"></span></div>
+  </div>
+</div>
+
+<div id="pmodal" hidden class="fixed inset-0 z-50 flex items-center justify-center p-4" style="background:rgba(5,8,16,.75)">
+  <div class="card w-full max-w-xl p-4 max-h-[85vh] flex flex-col" role="dialog" aria-labelledby="ptitle">
+    <div class="flex justify-between items-start gap-3 mb-1"><div><h3 class="font-semibold" id="ptitle"></h3><div class="mute text-xs mt-0.5" id="pmeta"></div></div><button class="ghost" id="pclose">Close</button></div>
+    <div class="mute text-xs mt-3 mb-1">Statement (paraphrased summary)</div>
+    <pre id="pstmt" class="inset text-sm p-3 overflow-auto whitespace-pre-wrap" style="font-family:'IBM Plex Sans',sans-serif;line-height:1.55"></pre>
+    <div class="mute text-xs mt-3 mb-1">Indexed mechanics</div>
+    <div id="pmech" class="mono text-xs" style="color:var(--acc)"></div>
+    <div id="pextra" class="mt-3 flex flex-wrap items-center gap-3 text-sm"></div>
+  </div>
+</div>
+<script>
+/* =====================================================================
+   AlgoGuard AI — how this file is organised
+
+   1. DATA      the sample problem repository and the app's state
+   2. CONCEPTS  the algorithmic ideas the engine knows how to recognise
+   3. ENGINE    turns a statement into numbers, then compares numbers
+   4. VIEWS     draws the inspector, the pool and the dashboard
+   5. START     connects tabs, the report dialog and the first render
+
+   The core idea: a problem's story ("apples in baskets") is ignored.
+   We only count the *mechanics* it mentions (ranges, sums, queries...),
+   turn those counts into a vector, and compare vectors with cosine
+   similarity. Two problems with the same mechanics land close together
+   even when they share almost no words.
+   ===================================================================== */
+
+
+/* ===== 1. DATA ======================================================= */
+
+// Each problem is stored as a short "mechanics" summary with the story removed.
+const PROBLEMS = [
+  { id:'P01', title:'Static Range Sum Queries', source:'CSES',                            year:2021, division:'Beginner',     category:'Arrays',  rating:1000, used:true,  mechanics:'array of n integers, q queries, each query asks the sum of values from l to r, prefix sum' },
+  { id:'P02', title:'Orchard Harvest',          source:'AspiHazar Spring 2024, Problem B', year:2024, division:'Beginner',     category:'Arrays',  rating:900,  used:true,  mechanics:'row of n baskets, q queries, total in range between l and r using cumulative running total' },
+  { id:'P03', title:'Books',                    source:'Codeforces 279B',                  year:2011, division:'Intermediate', category:'Arrays',  rating:1400, used:true,  mechanics:'longest consecutive segment with sum at most t, two pointers sliding window' },
+  { id:'P04', title:'Coin Combinations I',      source:'CSES',                            year:2021, division:'Intermediate', category:'DP',      rating:1600, used:true,  mechanics:'number of ways to form target sum using coins, dp, modulo 10^9+7' },
+  { id:'P05', title:'Road Network',             source:'AspiHazar Autumn 2023, Problem D', year:2023, division:'Intermediate', category:'Graphs',  rating:1500, used:true,  mechanics:'cities and roads graph, shortest path with bfs from city 1' },
+  { id:'P06', title:'Counting Rooms',           source:'CSES',                            year:2021, division:'Beginner',     category:'Graphs',  rating:1200, used:true,  mechanics:'grid cells, count connected components with dfs flood fill' },
+  { id:'P07', title:'Palindrome Repair',        source:'AspiHazar Spring 2025, Problem A', year:2025, division:'Beginner',     category:'Strings', rating:900,  used:true,  mechanics:'string, minimum changes to make it a palindrome, compare characters from both ends' },
+  { id:'P08', title:'Watermelon',               source:'Codeforces 4A',                    year:2010, division:'Beginner',     category:'Math',    rating:800,  used:true,  mechanics:'split into two even parts, parity, divisible by 2' },
+  { id:'P09', title:'Distinct Numbers',         source:'CSES',                            year:2021, division:'Beginner',     category:'Sorting', rating:800,  used:true,  mechanics:'count distinct values, sort, unique' },
+  { id:'P10', title:'Ladder Toll',              source:'Verified pool',                    year:2026, division:'Beginner',     category:'DP',      rating:1000, used:false, mechanics:'minimum cost to climb stairs taking steps of one or two, dp' },
+  { id:'P11', title:'Bracket Balance',          source:'Verified pool',                    year:2026, division:'Beginner',     category:'Strings', rating:1000, used:false, mechanics:'string of brackets, check balanced parentheses with a stack' },
+  { id:'P12', title:'Signal Lamps',             source:'Verified pool',                    year:2026, division:'Beginner',     category:'Math',    rating:1100, used:false, mechanics:'lcm and gcd of periods, multiple, divisible, remainder' },
+  { id:'P13', title:'Ferry Hops',               source:'Verified pool',                    year:2026, division:'Beginner',     category:'Graphs',  rating:1100, used:false, mechanics:'islands and ferry routes graph, minimum hops using bfs' },
+  { id:'P14', title:'Sticker Swap',             source:'Verified pool',                    year:2026, division:'Beginner',     category:'Sorting', rating:900,  used:false, mechanics:'sort the array, greedy at each step pair smallest and largest' },
+  { id:'P15', title:'Matching Pair Sum',        source:'Verified pool',                    year:2026, division:'Beginner',     category:'Arrays',  rating:1000, used:false, mechanics:'sorted array, find pair with target sum using two pointers' },
+  { id:'P16', title:'Fence Cuts',               source:'Verified pool',                    year:2026, division:'Intermediate', category:'Search',  rating:1500, used:false, mechanics:'binary search on answer, smallest x such that check is monotone' }
+];
+
+// Full statements (paraphrased summaries, not verbatim text) shown when a problem is opened.
+const STATEMENTS = {
+  P01:"You are given an array of n integers and q queries. Each query gives positions l and r; print the sum of the values from position l to position r.\n\nInput: n, q ≤ 2·10^5; values up to 10^9.\nSample: [3 2 4 5 1], query (2, 4) → 11.",
+  P02:"A grower keeps n crates in a row, each holding a known amount of fruit. On q separate days a buyer picks crates l through r and asks for the total fruit in them.\n\nInput: n, q ≤ 10^5.\nOutput: one total per day.",
+  P03:"n books stand on a shelf; book i takes a_i minutes to read. Starting from any book and reading consecutively, find the largest number of books that fit within t minutes.\n\nInput: n ≤ 10^5, t ≤ 10^9.",
+  P04:"There are n coin values. Count the ordered ways to make the total x using any number of coins of each value, modulo 10^9+7.\n\nInput: n ≤ 100, x ≤ 10^6.",
+  P05:"n cities are joined by m two-way roads. Print the fewest roads needed to travel from city 1 to every other city.\n\nInput: n ≤ 10^5, m ≤ 2·10^5.",
+  P06:"A building map is an n × m grid of floor and wall cells. Count the rooms, where a room is a maximal group of floor cells connected side by side.\n\nInput: n, m ≤ 1000.",
+  P07:"Given a lowercase string s, find the minimum number of letters to change so that s reads the same forwards and backwards.\n\nInput: |s| ≤ 1000.",
+  P08:"A fruit of integer weight w is to be split into two parts, each of positive even weight. Decide whether this is possible.\n\nInput: 1 ≤ w ≤ 100.",
+  P09:"Given n integers, print how many different values appear.\n\nInput: n ≤ 2·10^5.",
+  P10:"A ladder has n rungs, each with a toll c_i. You start below rung 1 and may climb one or two rungs per step. Find the minimum total toll to get past rung n.\n\nInput: n ≤ 10^5.",
+  P11:"Given a string made of ( ) [ ] { }, decide whether every bracket is closed by a matching bracket in the correct order.\n\nInput: length ≤ 10^5.",
+  P12:"Two lamps blink with periods a and b seconds and both flash at second 0. Find the next second at which they flash together.\n\nInput: a, b ≤ 10^9.",
+  P13:"n islands are linked by ferry routes. Find the fewest ferries needed to go from island 1 to island n, or report that it is impossible.\n\nInput: n ≤ 10^5, routes ≤ 2·10^5.",
+  P14:"Given n stickers with values a_i, pair them so that each pair holds the smallest and the largest remaining sticker. Print the pair sums in order.\n\nInput: n even, n ≤ 10^5.",
+  P15:"Given a sorted array of n integers and a target T, find two different positions whose values add up to T, or report that none exist.\n\nInput: n ≤ 2·10^5.",
+  P16:"A fence of length L is cut at k − 1 of n allowed cut points. Choose the cuts so that the shortest piece is as long as possible.\n\nInput: n ≤ 10^5."
+};
+
+// Three ready-made statements for trying the tool.
+const SAMPLE_STATEMENTS = {
+  apples:  'Farmer Aylin owns a long row of n baskets, and the i-th basket holds a_i apples. On each of the next q days a buyer names two baskets l and r and asks how many apples lie in all baskets from l to r in total.\n\nInput: n, q ≤ 2·10^5. 1 ≤ a_i ≤ 10^9.\nOutput: q lines, the total for each day.\nSample: 5 baskets [3 2 4 5 1], query (2, 4) → 11.',
+  digits:  'Ravan writes down a string s of n digits. Count the substrings whose numeric value is divisible by 3.\n\nInput: n ≤ 2·10^5, s consists of digits 0-9.\nOutput: one integer.\nSample: s = "3123" → 8.',
+  tickets: 'A bus company sells tickets worth 1, 3 or 7 manat. Ayaz must pay exactly X manat using any number of tickets. Count the number of ways to pay, modulo 10^9+7. Order of tickets does not matter.\n\nInput: X ≤ 10^6.\nOutput: number of ways modulo 10^9+7.\nSample: X = 4 → 2.'
+};
+
+// Everything that changes while the app runs lives here.
+const state = {
+  warnAt: 45,                 // similarity (%) where "partial overlap" starts
+  highAt: 75,                 // similarity (%) where "high duplicate risk" starts
+  poolFilters: { search: '', category: 'All', status: 'All', beginnerSafeOnly: false },
+  lastAnalysis: null,         // { text, analysis, matches } from the latest run
+  sessionResults: [],         // every analysis run since the page opened
+  baseline: { analyses: 148, blocked: 37 },   // sample history before this session
+  // Audit log rows: [date, coordinator, action, item, outcome]
+  auditLog: [
+    ['2026-09-24', 'Leyla H.', 'Analysed',         'Two-Sum Variants', 'Safe'],
+    ['2026-09-19', 'Leyla H.', 'Blocked',          'Basket Totals',    'High risk · P01'],
+    ['2026-09-02', 'Leyla H.', 'Handoff accepted', 'Repository v3',    'Audit ok'],
+    ['2026-06-14', 'Rauf A.',  'Analysed',         'Tile the Yard',    'Partial · P06'],
+    ['2025-11-03', 'Rauf A.',  'Blocked',          'Palindrome Fix',   'High risk · P07'],
+    ['2025-02-21', 'Nigar M.', 'Indexed',          '12 problems',      'Baseline']
+  ],
+  // Coordinator rows: [name, term, problems added, duplicates blocked]
+  coordinators: [
+    ['Nigar M.', '2023–24', 31, 6],
+    ['Rauf A.',  '2024–25', 44, 13],
+    ['Leyla H.', '2025–now', 38, 18]
+  ]
+};
+
+
+/* ===== 2. CONCEPTS =================================================== */
+
+// Archetypes are the algorithm families we can name. Each one has:
+//   pattern     - words and phrases in a statement that hint at it
+//   equations   - the maths that usually sits at its heart
+//   complexity  - the typical running time
+const ARCHETYPES = {
+  prefix: {
+    name: 'Prefix Sums',
+    pattern: /prefix|cumulative|running total|range sum|(total|sum|how many).{0,70}\bl\b.{0,25}\br\b|from l to r|l (through|to|and) r|between l and r/g,
+    equations: ['P[i] = P[i−1] + a[i]', 'S(l, r) = P[r] − P[l−1]'],
+    complexity: 'O(n + q) — O(1) per query after O(n) build'
+  },
+  twoptr: {
+    name: 'Two Pointers',
+    pattern: /two pointers?|sliding window|sorted.{0,40}pair|sorted (array|list).{0,80}(sum|target)|two (distinct )?(elements|indices|numbers).{0,40}(sum|target)|pair.{0,30}(sum|target)|longest .{0,30}(consecutive|contiguous|segment)|shortest .{0,30}(subarray|segment)/g,
+    equations: ['for each l: r(l) = max{ r : Σ a[l..r] ≤ T }', 'l ↑ ⇒ r(l) ↑  (monotone window)'],
+    complexity: 'O(n) after sorting, O(n log n) overall'
+  },
+  dp: {
+    name: 'Dynamic Programming',
+    pattern: /\bdp\b|dynamic|number of ways|ways to|coins?\b|knapsack|subsequence|stair\w*|ladder|toll|minimum (total )?cost/g,
+    equations: ['dp[x] = Σ dp[x − c]  over choices c', 'dp[0] = base case'],
+    complexity: 'O(n · k) — states × transitions'
+  },
+  graph: {
+    name: 'Graph Traversal',
+    pattern: /graph|edges?\b|vertex|vertices|\bnodes?\b|shortest path|connected|\bbfs\b|\bdfs\b|roads?\b|cit(y|ies)|ferr(y|ies)|islands?|routes?/g,
+    equations: ['d[v] = min over edges (u,v) of d[u] + w(u,v)', 'work = O(|V| + |E|)'],
+    complexity: 'O(V + E) with BFS/DFS, O((V+E) log V) with Dijkstra'
+  },
+  strings: {
+    name: 'String Processing',
+    pattern: /string|substring|palindrome|characters?\b|letters?\b|digits?\b|brackets?|parenthes/g,
+    equations: ['s[i] = s[n−1−i]  for all i < n/2'],
+    complexity: 'O(n) single scan'
+  },
+  math: {
+    name: 'Number Theory',
+    pattern: /gcd|lcm|prime|divisor|divisible|parity|remainder|multiple|\bmod\b|modulo (3|2|5|7)|by 3/g,
+    equations: ['gcd(a, b) = gcd(b, a mod b)', 'lcm(a, b) = a·b / gcd(a, b)'],
+    complexity: 'O(log n) per gcd; O(√n) for primality'
+  },
+  greedy: {
+    name: 'Greedy',
+    pattern: /greedy|at each step|as many as possible|exchange argument/g,
+    equations: ['choose locally best item at each step'],
+    complexity: 'O(n log n) dominated by sorting'
+  },
+  sorting: {
+    name: 'Sorting / Sets',
+    pattern: /\bsort(?!ed)|distinct (values|numbers)|unique|median|\brank/g,
+    equations: ['sort(a);  answer read from adjacent elements'],
+    complexity: 'O(n log n)'
+  },
+  binsearch: {
+    name: 'Binary Search on Answer',
+    pattern: /binary search|monotone|minimum possible maximum|(smallest|largest) .{0,20}such that/g,
+    equations: ['find min x with f(x) = true, f monotone'],
+    complexity: 'O(n log A) — check() per candidate'
+  },
+  grid: {
+    name: 'Grid Flood Fill',
+    pattern: /grid|matrix|\bcells?\b|rows and columns|n ?× ?m/g,
+    equations: ['components = flood fill over 4-neighbours'],
+    complexity: 'O(n · m)'
+  }
+};
+
+// Intent: what is the task asking for? Counting and optimising are
+// different problems even when the algorithm family is the same.
+const INTENTS = {
+  count:  /number of ways|count|how many|ways to/g,
+  opt:    /minimum|maximum|smallest|largest|minimi[sz]e|maximi[sz]e|fewest|at most/g,
+  decide: /whether|check|determine|is it possible|yes or no|balanced/g
+};
+
+// Shape: cheap hints about the input format. These matter least.
+const SHAPES = {
+  array:   /array|sequence|row of|n (baskets|boxes|integers|numbers|items|lanterns)|a_?i|a\[/g,
+  queries: /quer|\bq\b|each of the (next )?q/g,
+  modulo:  /10\^9|1e9|998244353|modulo/g,
+  multi:   /test cases?/g
+};
+
+// How much each kind of feature counts when vectors are compared.
+const WEIGHT = { archetype: 1.6, intent: 1.3, shape: 0.45 };
+
+// Finds a bound such as "n ≤ 2·10^5", "q ≤ 10^5", "X ≤ 1,000".
+const BOUND_PATTERN = /\b(?:n|m|q|x|k|length|size)\b(?:\s*,\s*(?:q|m))?\s*(?:≤|<=)\s*(\d[\d,]*(?:\.\d+)?\s*[·*×x]\s*10\^\d+|10\^\d+|\d+(?:\.\d+)?e\d+|\d[\d,]*)/i;
+
+// Words that carry no meaning for the keyword-overlap comparison.
+const STOP_WORDS = new Set('the a an of to and in for is are with each that it on as be by at from or this his her their you your all i'.split(' '));
+
+
+/* ===== 3. ENGINE ===================================================== */
+
+// Score one feature: 0 hits -> 0, 1 hit -> 1, more hits grow slowly and stop at 3.
+// (Slow growth stops one repeated word from dominating the whole vector.)
+function featureScore(pattern, text) {
+  const hits = text.match(pattern);
+  return hits ? 1 + Math.log(Math.min(hits.length, 3)) : 0;
+}
+
+// Turn a statement into a vector: one weighted number per feature.
+function toVector(text) {
+  const lower = text.toLowerCase();
+  const vector = {};
+  for (const key in ARCHETYPES) vector[key] = featureScore(ARCHETYPES[key].pattern, lower) * WEIGHT.archetype;
+  for (const key in INTENTS)    vector[key] = featureScore(INTENTS[key], lower)             * WEIGHT.intent;
+  for (const key in SHAPES)     vector[key] = featureScore(SHAPES[key], lower)              * WEIGHT.shape;
+  return vector;
+}
+
+// Which algorithm families does this vector contain?
+function archetypesIn(vector) {
+  return Object.keys(ARCHETYPES).filter(key => vector[key] > 0);
+}
+
+// Cosine similarity, then scaled down when the two problems do not
+// share the same set of algorithm families. Range: 0 (unrelated) to 1 (same).
+function semanticSimilarity(vectorA, vectorB) {
+  let dot = 0, lengthA = 0, lengthB = 0;
+  for (const key in vectorA) {
+    dot     += vectorA[key] * vectorB[key];
+    lengthA += vectorA[key] ** 2;
+    lengthB += vectorB[key] ** 2;
+  }
+  if (!lengthA || !lengthB) return 0;
+
+  const cosine = dot / Math.sqrt(lengthA * lengthB);
+  const familiesA = archetypesIn(vectorA);
+  const familiesB = archetypesIn(vectorB);
+  const union = new Set([...familiesA, ...familiesB]);
+  const shared = familiesA.filter(key => familiesB.includes(key)).length;
+  const familyOverlap = union.size ? shared / union.size : 0;
+
+  return cosine * (0.5 + 0.5 * familyOverlap);
+}
+
+// The set of meaningful words in a text (used only to show what plain keyword search would see).
+function meaningfulWords(text) {
+  const words = text.toLowerCase().replace(/[^a-z ]/g, ' ').split(/\s+/);
+  return new Set(words.filter(word => word.length > 2 && !STOP_WORDS.has(word)));
+}
+
+// Share of words the two texts have in common, 0 to 1 (Jaccard index).
+function keywordOverlap(textA, textB) {
+  const wordsA = meaningfulWords(textA);
+  const wordsB = meaningfulWords(textB);
+  let common = 0;
+  wordsA.forEach(word => { if (wordsB.has(word)) common++; });
+  const total = wordsA.size + wordsB.size - common;
+  return total ? common / total : 0;
+}
+
+// Turn "2·10^5", "10^5", "2e5" or "5,000" into a plain number.
+function parseBound(raw) {
+  const text = raw.replace(/[,\s]/g, '').replace(/[·*×x]/g, '*');
+  let found = text.match(/^([\d.]*)\*?10\^(\d+)/);
+  if (found) return (parseFloat(found[1]) || 1) * Math.pow(10, +found[2]);
+  found = text.match(/^([\d.]+)e(\d+)/i);
+  if (found) return parseFloat(found[1]) * Math.pow(10, +found[2]);
+  return parseFloat(text) || null;
+}
+
+// Say what the size limit means for the solution you can expect.
+function describeBound(text) {
+  const found = text.match(BOUND_PATTERN);
+  const limit = found ? parseBound(found[1]) : null;
+  if (!limit) return 'No explicit bound on n found; add constraints to verify complexity.';
+
+  const shown = limit.toLocaleString('en-US');
+  if (limit >= 1e5)  return `the bound ${shown} rules out O(n²); an O(n log n) or better solution is required.`;
+  if (limit <= 5000) return `the bound ${shown} permits O(n²) solutions — check this matches the intended difficulty.`;
+  return `the bound ${shown}: O(n √n) or O(n log n) both fit.`;
+}
+
+// Read a statement: what is it, how fast must it run, what maths does it use?
+function analyseStatement(text) {
+  const vector = toVector(text);
+  const families = archetypesIn(vector).sort((a, b) => vector[b] - vector[a]);   // strongest first
+  const best = families[0];
+
+  return {
+    vector,
+    families,
+    archetypeName: best ? ARCHETYPES[best].name : 'Ad-hoc / Implementation',
+    complexity:    best ? ARCHETYPES[best].complexity : 'Depends on approach',
+    boundNote:     describeBound(text),
+    equations:     [...new Set(families.slice(0, 2).flatMap(key => ARCHETYPES[key].equations))],
+    constraints:   text.split(/\n|\./).map(line => line.trim())
+                       .filter(line => /≤|<=|≥|10\^|\bmod/i.test(line)).slice(0, 4)
+  };
+}
+
+// Compare a statement with every stored problem, most similar first.
+function findMatches(text, analysis) {
+  return PROBLEMS
+    .map(problem => ({
+      problem,
+      similarity:     semanticSimilarity(analysis.vector, problem.vector),
+      keywordOverlap: keywordOverlap(text, problem.mechanics + ' ' + problem.title)
+    }))
+    .sort((a, b) => b.similarity - a.similarity);
+}
+
+// Vectors for the stored problems are computed once, up front.
+PROBLEMS.forEach(problem => { problem.vector = toVector(problem.mechanics); });
+
+/* ===== 3b. LINKS, SECTIONS AND SAVED PROBLEMS ======================== */
+
+const BEGINNERS = 'Beginners division';
+state.sections = [BEGINNERS, 'Intermediate division', 'Other competition'];
+state.poolFilters.section = 'All';
+
+// Public addresses of the sample problems that come from Codeforces or CSES.
+const LINKS = {
+  P01: 'https://cses.fi/problemset/task/1646',  P03: 'https://codeforces.com/problemset/problem/279/B',
+  P04: 'https://cses.fi/problemset/task/1635',  P06: 'https://cses.fi/problemset/task/1192',
+  P08: 'https://codeforces.com/problemset/problem/4/A', P09: 'https://cses.fi/problemset/task/1621'
+};
+PROBLEMS.forEach(p => {
+  p.link = LINKS[p.id] || '';
+  p.section = p.division === 'Beginner' ? BEGINNERS : 'Intermediate division';
+});
+
+// A link becomes a short key (host + path) so www., http/https, case and a trailing slash do not matter.
+// Returns '' for an empty box and null when the text is not a usable address.
+function normalizeLink(raw) {
+  let text = (raw || '').trim();
+  if (!text) return '';
+  if (!/^https?:\/\//i.test(text)) text = 'https://' + text;
+  try {
+    const url = new URL(text);
+    if (!url.hostname.includes('.')) return null;
+    const key = (url.hostname.replace(/^www\./, '') + url.pathname).replace(/\/+$/, '').toLowerCase();
+    // Codeforces writes one problem two ways (/problemset/problem/279/B and /contest/279/problem/B): treat them as one.
+    const cf = key.match(/^codeforces\.com\/(?:problemset\/problem|contest)\/(\d+)\/(?:problem\/)?([a-z]\d?)$/);
+    return cf ? 'codeforces.com/problem/' + cf[1] + '/' + cf[2] : key;
+  } catch (error) { return null; }
+}
+// The safe, full address to store and show.
+function cleanLink(raw) {
+  if (!normalizeLink(raw)) return '';
+  return new URL(/^https?:\/\//i.test(raw.trim()) ? raw.trim() : 'https://' + raw.trim()).href;
+}
+// A readable label such as "Codeforces 279B" or "CSES task 1646".
+function describeLink(raw) {
+  const key = normalizeLink(raw);
+  if (!key) return '';
+  let m = key.match(/^codeforces\.com\/problem\/(\d+)\/([a-z]\d?)$/);
+  if (m) return 'Codeforces ' + m[1] + m[2].toUpperCase();
+  m = key.match(/cses\.fi\/problemset\/task\/(\d+)/);
+  if (m) return 'CSES task ' + m[1];
+  return key.split('/')[0];
+}
+const findByLink = key => PROBLEMS.find(p => p.link && normalizeLink(p.link) === key);
+
+// Problems a coordinator adds are kept in this browser (localStorage), so they survive a refresh.
+const STORE_KEY = 'algoguard.added.v1';
+function saveAdded() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify({
+      sections: state.sections,
+      problems: PROBLEMS.filter(p => p.added).map(p => { const { vector, ...rest } = p; return { ...rest, statement: STATEMENTS[p.id] }; })
+    }));
+  } catch (error) { /* storage unavailable: the pool still works for this visit */ }
+}
+try {
+  const saved = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+  if (saved) {
+    saved.sections.forEach(name => { if (!state.sections.includes(name)) state.sections.push(name); });
+    saved.problems.forEach(({ statement, ...p }) => { STATEMENTS[p.id] = statement; p.vector = toVector(statement); p.added = true; PROBLEMS.push(p); });
+  }
+} catch (error) { /* ignore unreadable saved data */ }
+
+const CATEGORY_OF = { prefix: 'Arrays', twoptr: 'Arrays', dp: 'DP', graph: 'Graphs', grid: 'Graphs', strings: 'Strings', math: 'Math', greedy: 'Sorting', sorting: 'Sorting', binsearch: 'Search' };
+
+function addToPool() {
+  const la = state.lastAnalysis;
+  if (!la || la.added) return;
+  const msg = byId('addmsg');
+  const title = byId('addt').value.trim();
+  if (!title) { msg.textContent = 'Give the problem a title first.'; return; }
+  const link = cleanLink(byId('addl').value);
+  if (byId('addl').value.trim() && !link) { msg.textContent = 'That link is not a valid address.'; return; }
+  if (link && findByLink(normalizeLink(link))) { msg.textContent = 'This link is already in the pool.'; return; }
+  const newSection = byId('adds2').value.trim();
+  const section = newSection || byId('adds').value;
+  if (!state.sections.includes(section)) state.sections.push(section);
+  const rating = Math.min(3500, Math.max(800, parseInt(byId('addr').value, 10) || 1000));
+  const next = PROBLEMS.reduce((max, p) => Math.max(max, parseInt(p.id.slice(1), 10) || 0), 0) + 1;
+  const id = 'P' + String(next).padStart(2, '0');
+  PROBLEMS.push({
+    id, title, source: describeLink(link) || 'Added by coordinator', year: new Date().getFullYear(),
+    division: section === BEGINNERS ? 'Beginner' : 'Intermediate', section, category: byId('addc').value, rating,
+    used: byId('addu').value === 'Used', mechanics: la.text.replace(/\s+/g, ' ').slice(0, 200),
+    link, added: true, vector: la.analysis.vector
+  });
+  STATEMENTS[id] = la.text;
+  la.added = id;
+  saveAdded();
+  state.auditLog.unshift([new Date().toISOString().slice(0, 10), 'Leyla H.', 'Indexed', title.slice(0, 40), 'Added to ' + section]);
+  renderAll();
+  renderResults();
+}
+
+function removeAdded(id) {
+  const index = PROBLEMS.findIndex(p => p.id === id && p.added);
+  if (index < 0) return;
+  PROBLEMS.splice(index, 1);
+  delete STATEMENTS[id];
+  if (state.lastAnalysis && state.lastAnalysis.added === id) state.lastAnalysis.added = null;
+  saveAdded();
+  byId('pmodal').hidden = true;
+  renderAll();
+  if (state.lastAnalysis) renderResults();
+}
+
+
+
+/* ===== 4. VIEWS ====================================================== */
+
+const byId = id => document.getElementById(id);
+const escapeHtml = value => String(value).replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+
+// Turn a similarity percentage into a label and a colour.
+function riskLevel(percent) {
+  if (percent >= state.highAt) return { label: 'High duplicate risk', color: 'var(--bad)' };
+  if (percent >= state.warnAt) return { label: 'Partial overlap',     color: 'var(--warn)' };
+  return { label: 'Safe / original', color: 'var(--ok)' };
+}
+
+/* ---- Tabs ---- */
+
+const TABS = [['inspect', 'Problem inspector'], ['pool', 'Problem pool'], ['dash', 'Dashboard']];
+
+function showTab(activeId) {
+  TABS.forEach(([id]) => { byId('v-' + id).hidden = (id !== activeId); });
+  byId('tabs').innerHTML = TABS.map(([id, label]) =>
+    `<button class="tab" role="tab" aria-selected="${id === activeId}" data-t="${id}">${label}</button>`).join('');
+  byId('tabs').querySelectorAll('button').forEach(button => {
+    button.onclick = () => showTab(button.dataset.t);
+  });
+  renderAll();
+}
+
+function renderAll() {
+  renderInspector();
+  renderPool();
+  renderDashboard();
+}
+
+/* ---- Inspector: the input side ---- */
+
+// Draws the input panel once; later renders leave it alone so typed text is never lost.
+function renderInspector() {
+  if (byId('stmt')) return;
+
+  byId('v-inspect').innerHTML = `
+  <div class="grid lg:grid-cols-5 gap-4">
+    <div class="lg:col-span-2 card p-4 self-start">
+      <label for="plink" class="font-medium text-sm">Problem link <span class="mute font-normal">(optional)</span></label>
+      <input id="plink" inputmode="url" placeholder="https://codeforces.com/problemset/problem/279/B">
+      <p class="mute text-xs mb-3 mt-1">A link is checked against links already in the pool. This page cannot read other websites, so paste the statement below to compare mechanics.</p>
+      <label for="stmt" class="font-medium text-sm">Candidate problem statement</label>
+      <p class="mute text-xs mb-2">Paste narrative, constraints and sample notes.</p>
+      <textarea id="stmt" rows="13" placeholder="Paste a problem statement…"></textarea>
+      <div class="flex flex-wrap gap-2 mt-2">
+        <button class="ghost" data-s="apples">Story-wrapped prefix sums</button>
+        <button class="ghost" data-s="digits">Digit substrings</button>
+        <button class="ghost" data-s="tickets">Ticket counting</button>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mt-4">
+        <div><label class="text-xs mute" for="tw">Partial overlap from <b id="twv" class="mono"></b>%</label><input type="range" id="tw" min="10" max="90" value="${state.warnAt}"></div>
+        <div><label class="text-xs mute" for="th">High risk from <b id="thv" class="mono"></b>%</label><input type="range" id="th" min="20" max="99" value="${state.highAt}"></div>
+      </div>
+      <button class="btn w-full mt-4" id="go">Analyse problem</button>
+    </div>
+    <div class="lg:col-span-3" id="out">
+      <div class="card p-6 mute text-sm">Load a sample or paste a statement, then choose Analyse problem. Results compare mechanics, not wording.</div>
+    </div>
+  </div>`;
+
+  // Sample buttons fill the text box.
+  document.querySelectorAll('[data-s]').forEach(button => {
+    button.onclick = () => { byId('stmt').value = SAMPLE_STATEMENTS[button.dataset.s]; };
+  });
+
+  // The two thresholds must stay at least 5 points apart; moving one pushes the other.
+  byId('tw').oninput = event => {
+    state.warnAt = +event.target.value;
+    if (state.warnAt > state.highAt - 5) {
+      state.highAt = Math.min(99, state.warnAt + 5);
+      state.warnAt = Math.min(state.warnAt, state.highAt - 5);
+    }
+    syncThresholds();
+  };
+  byId('th').oninput = event => {
+    state.highAt = +event.target.value;
+    if (state.highAt < state.warnAt + 5) {
+      state.warnAt = Math.max(10, state.highAt - 5);
+      state.highAt = Math.max(state.highAt, state.warnAt + 5);
+    }
+    syncThresholds();
+  };
+
+  byId('go').onclick = runAnalysis;
+  syncThresholds();
+}
+
+// Show the threshold numbers, and redraw anything that depends on them.
+function syncThresholds() {
+  byId('twv').textContent = state.warnAt;
+  byId('thv').textContent = state.highAt;
+  byId('tw').value = state.warnAt;
+  byId('th').value = state.highAt;
+  if (state.lastAnalysis) renderResults();
+  renderDashboard();
+}
+
+// Runs when "Analyse problem" is pressed.
+function runAnalysis() {
+  const text = byId('stmt').value.trim();
+  const linkRaw = byId('plink').value.trim();
+  const key = normalizeLink(linkRaw);
+  const note = html => { byId('out').innerHTML = `<div class="card p-4 text-sm" style="border-color:var(--warn)">${html}</div>`; };
+  if (key === null) return note('That does not look like a valid link. Use the full address, for example https://codeforces.com/problemset/problem/279/B.');
+  const hit = key ? findByLink(key) : null;     // same link already stored = same problem
+  // A statement identical to a stored one (ignoring case and spacing) is also the same problem.
+  const norm = t => t.toLowerCase().replace(/\s+/g, ' ').trim();
+  const same = text.length >= 30 ? PROBLEMS.find(p => STATEMENTS[p.id] && norm(STATEMENTS[p.id]) === norm(text)) : null;
+  const found = hit || same;
+
+  const record = (title, label, percent, match) => {
+    state.sessionResults.push({ title, percent, match });
+    const outcome = percent >= state.highAt ? 'High risk' : percent >= state.warnAt ? 'Partial' : 'Safe';
+    state.auditLog.unshift([new Date().toISOString().slice(0, 10), 'Leyla H.', 'Analysed', label, outcome + ' · ' + match.id]);
+    renderDashboard();
+  };
+
+  if (text.length < 30) {
+    if (hit) {
+      state.lastAnalysis = null;
+      byId('out').innerHTML = linkHitCard(hit);
+      record('Link ' + describeLink(linkRaw), 'Link ' + describeLink(linkRaw), 100, hit);
+      return;
+    }
+    return note(key
+      ? `<b>${escapeHtml(describeLink(linkRaw))}</b> is not in the pool yet. This page cannot open other websites, so paste the statement text as well and the mechanics will be compared. The link is kept as the source if you add the problem.`
+      : 'Statement is too short to analyse. Paste the full problem, including constraints, or a link that is already in the pool.');
+  }
+
+  const analysis = analyseStatement(text);
+  const matches = findMatches(text, analysis);
+  state.lastAnalysis = { text, analysis, matches, link: linkRaw, linkHit: found, hitWhy: hit ? 'link' : 'text', added: null, skipped: false };
+  renderResults();
+
+  const best = matches[0];
+  const percent = found ? 100 : Math.round(best.similarity * 100);
+  record(text.split(/[.\n]/)[0].slice(0, 60), 'Candidate ' + (state.sessionResults.length + 1), percent, found || best.problem);
+}
+
+/* ---- Inspector: the results side (one small function per card) ---- */
+
+function renderResults() {
+  const { text, analysis } = state.lastAnalysis;
+  let { matches } = state.lastAnalysis;
+  const same = state.lastAnalysis.linkHit;      // an identical link or statement outranks any score
+  if (same) matches = [{ problem: same, similarity: 1, keywordOverlap: keywordOverlap(text, same.mechanics + ' ' + same.title) },
+                       ...matches.filter(m => m.problem !== same)];
+  byId('out').innerHTML = `<div class="space-y-4">
+    ${state.lastAnalysis.linkHit ? linkHitCard(state.lastAnalysis.linkHit, state.lastAnalysis.hitWhy) : ''}
+    ${scoreCard(text, analysis, matches)}
+    ${mechanicsCard(analysis)}
+    ${comparisonCard(text, analysis, matches)}
+    ${alternativesCard(analysis)}
+    ${addCard()}
+  </div>`;
+}
+
+// The circular gauge: the arc length is the risk percentage.
+function gaugeSvg(percent, color) {
+  const circumference = 2 * Math.PI * 52;
+  return `<svg viewBox="0 0 130 130" class="w-36 h-36 shrink-0" role="img" aria-label="Duplication risk ${percent} percent">
+    <circle cx="65" cy="65" r="52" fill="none" stroke="var(--line)" stroke-width="10"/>
+    <circle class="ring" cx="65" cy="65" r="52" fill="none" stroke="${color}" stroke-width="10" stroke-linecap="round" stroke-dasharray="${circumference}" stroke-dashoffset="${circumference * (1 - percent / 100)}" transform="rotate(-90 65 65)"/>
+    <text x="65" y="66" text-anchor="middle" fill="var(--ink)" font-size="28" font-weight="600" font-family="IBM Plex Mono">${percent}%</text>
+    <text x="65" y="86" text-anchor="middle" fill="var(--mute)" font-size="9">duplication risk</text></svg>`;
+}
+
+// Card 1: the verdict and a plain-language reason.
+function scoreCard(text, analysis, matches) {
+  const top = matches[0];
+  const percent = Math.round(top.similarity * 100);
+  const keywordPercent = Math.round(top.keywordOverlap * 100);
+  const risk = riskLevel(percent);
+  const sharedNames = archetypesIn(top.problem.vector).filter(key => analysis.vector[key] > 0).map(key => ARCHETYPES[key].name);
+
+  const reason = percent >= state.warnAt
+    ? `Matches <b>${percent}%</b> of the underlying mechanics of <b>${escapeHtml(top.problem.title)}</b> (${escapeHtml(top.problem.source)}) while sharing only <b>${keywordPercent}%</b> of its wording. ${sharedNames.length ? 'Shared mechanics: ' + sharedNames.join(', ') + '.' : ''} A keyword search would ${keywordPercent < 25 ? 'have missed this' : 'only partly catch this'}.`
+    : `Closest repository problem is <b>${escapeHtml(top.problem.title)}</b> at ${percent}% mechanic similarity — below your ${state.warnAt}% partial-overlap threshold.`;
+
+  return `<div class="card p-4 flex flex-wrap gap-5 items-center">${gaugeSvg(percent, risk.color)}
+    <div class="flex-1 min-w-[220px]">
+      <div class="text-lg font-semibold" style="color:${risk.color}">${risk.label}</div>
+      <p class="text-sm mt-1" style="line-height:1.55">${reason}</p>
+      <div class="mono text-xs mute mt-2">semantic similarity ${top.similarity.toFixed(3)} · keyword overlap ${keywordPercent}%</div>
+    </div></div>`;
+}
+
+// Card 2: what the parser found.
+function mechanicsCard(analysis) {
+  const familyChips = analysis.families.map(key => `<span class="chip on">${ARCHETYPES[key].name}</span>`).join('')
+    || '<span class="mute text-xs">no archetype detected</span>';
+  const equationLines = analysis.equations.map(eq => `<div class="mono text-sm" style="color:var(--acc)">${eq}</div>`).join('')
+    || '<span class="mute text-xs">none inferred</span>';
+  const constraintLines = analysis.constraints.map(line => `<div class="mono text-xs mute mt-1">${escapeHtml(line)}</div>`).join('');
+
+  return `<div class="card p-4"><h3 class="font-medium mb-3">Parsed mechanics</h3>
+    <div class="grid sm:grid-cols-2 gap-3 text-sm">
+      <div class="inset p-3"><div class="mute text-xs">Core archetype</div><div class="font-semibold mt-0.5">${analysis.archetypeName}</div><div class="mt-1">${familyChips}</div></div>
+      <div class="inset p-3"><div class="mute text-xs">Time complexity target</div><div class="mono font-medium mt-0.5">${analysis.complexity}</div><div class="text-xs mute mt-1">${analysis.boundNote}</div></div>
+      <div class="inset p-3 sm:col-span-2"><div class="mute text-xs mb-1">Structural equations and constraints</div>${equationLines}${constraintLines}</div>
+    </div></div>`;
+}
+
+// Card 3: the candidate next to its closest match, plus the nearest neighbours.
+function comparisonCard(text, analysis, matches) {
+  const top = matches[0];
+  const topFamilies = archetypesIn(top.problem.vector);
+  const shared = topFamilies.filter(key => analysis.vector[key] > 0);
+  const onlyCandidate = analysis.families.filter(key => !top.problem.vector[key]);
+  const onlyMatch = topFamilies.filter(key => !analysis.vector[key]);
+
+  // Words in the candidate that the matched problem never uses: the "story".
+  const matchWords = meaningfulWords(top.problem.mechanics + ' ' + top.problem.title);
+  const storyWords = [...meaningfulWords(text)].filter(word => !matchWords.has(word)).slice(0, 10);
+
+  const chips = (keys) => keys.map(key => `<span class="chip ${shared.includes(key) ? 'on' : ''}">${ARCHETYPES[key].name}</span>`).join('') || '—';
+  const neighbours = matches.slice(0, 4).map(({ problem, similarity }) => {
+    const percent = Math.round(similarity * 100);
+    return `<div class="flex items-center gap-2 text-sm py-1">
+      <button class="w-40 sm:w-56 truncate text-left underline decoration-dotted" data-p="${problem.id}">${escapeHtml(problem.title)}</button>
+      <div class="flex-1 h-2 rounded" style="background:var(--line)"><div class="h-2 rounded" style="width:${percent}%;background:${riskLevel(percent).color}"></div></div>
+      <span class="mono w-10 text-right">${percent}%</span></div>`;
+  }).join('');
+
+  return `<div class="card p-4"><h3 class="font-medium mb-3">Side-by-side comparison</h3>
+    <div class="grid sm:grid-cols-2 gap-3 text-sm">
+      <div class="inset p-3"><div class="mute text-xs">Candidate</div><div class="mt-1">${chips(onlyCandidate.concat(shared))}</div><div class="text-xs mute mt-2">Narrative-only words: ${storyWords.map(escapeHtml).join(', ') || '—'}</div></div>
+      <div class="inset p-3"><div class="mute text-xs">${escapeHtml(top.problem.title)} · ${escapeHtml(top.problem.source)}</div><div class="mt-1">${chips(shared.concat(onlyMatch))}</div><div class="text-xs mute mt-2 mono">${escapeHtml(top.problem.mechanics)}</div><button class="ghost mt-2" data-p="${top.problem.id}">Read full statement</button></div>
+    </div>
+    <div class="mt-4 text-xs mute mb-1">Nearest neighbours</div>${neighbours}</div>`;
+}
+
+// Card 4: three unused beginner problems that are not too close to the candidate.
+function alternativesCard(analysis) {
+  const mainFamily = analysis.families[0];
+  const suggestions = PROBLEMS
+    .filter(p => !p.used && p.section === BEGINNERS && p.rating <= 1200)
+    .map(p => ({ problem: p, similarity: semanticSimilarity(analysis.vector, p.vector), sameFamily: !!(mainFamily && p.vector[mainFamily] > 0) }))
+    .filter(s => s.similarity * 100 < state.highAt)
+    .sort((a, b) => (Number(b.sameFamily) - Number(a.sameFamily)) || (b.similarity - a.similarity))   // same family first, then closest
+    .slice(0, 3);
+
+  const cards = suggestions.map(({ problem, similarity, sameFamily }) => `<div class="inset p-3 text-sm">
+      <button class="font-medium text-left underline decoration-dotted" data-p="${problem.id}">${escapeHtml(problem.title)}</button>
+      <div class="mute text-xs">${problem.category} · rating ${problem.rating}</div>
+      <div class="mono text-xs mt-2">${Math.round(similarity * 100)}% overlap with candidate</div>
+      ${sameFamily ? '<span class="chip on mt-1">same archetype</span>' : ''}</div>`).join('')
+    || '<span class="mute text-sm">No alternatives under the current threshold.</span>';
+
+  return `<div class="card p-4"><h3 class="font-medium">Safe beginner alternatives</h3>
+    <p class="text-xs mute mb-3">Unrepeated, verified, rated 1200 or lower, under your high-risk threshold.</p>
+    <div class="grid sm:grid-cols-3 gap-3">${cards}</div></div>`;
+}
+
+
+// Shown when the pasted link is already stored: same address means same problem.
+function linkHitCard(p, why = 'link') {
+  return `<div class="card p-4" style="border-color:var(--bad)"><h3 class="font-medium" style="color:var(--bad)">${why === 'link' ? 'Exact link match' : 'Identical statement'}</h3>
+    <p class="text-sm mt-1">${why === 'link' ? 'This link' : 'This statement'} is already in the pool as <button class="underline decoration-dotted" data-p="${p.id}">${escapeHtml(p.title)}</button>
+    (${escapeHtml(p.section)}, ${p.used ? 'used' : 'unrepeated'}). ${why === 'link' ? 'The same address is the same problem' : 'The same text is the same problem'}, so it counts as a 100% duplicate.</p></div>`;
+}
+
+// "Add to pool" is offered only for problems judged unrepeated, and always alongside "Test only".
+function addCard() {
+  const la = state.lastAnalysis;
+  const percent = Math.round(la.matches[0].similarity * 100);
+  const shell = inner => `<div class="card p-4"><h3 class="font-medium">Add to pool</h3>${inner}</div>`;
+  if (la.linkHit || percent >= state.warnAt) {
+    return shell(`<p class="text-xs mute mt-1">Adding is only offered for problems judged unrepeated (below ${state.warnAt}% similarity). This one was tested only.</p>`);
+  }
+  const added = la.added && PROBLEMS.find(p => p.id === la.added);
+  if (added) {
+    return `<div class="card p-4" style="border-color:var(--ok)"><h3 class="font-medium">Added to the pool</h3>
+      <p class="text-sm mt-1"><button class="underline decoration-dotted" data-p="${added.id}">${escapeHtml(added.title)}</button> is now ${added.id} in ${escapeHtml(added.section)} and is checked against in every future analysis.</p></div>`;
+  }
+  if (la.skipped) {
+    return shell(`<p class="text-sm mt-1">Tested only. Nothing was saved. <button class="underline decoration-dotted" data-reopen>Add it to the pool instead</button></p>`);
+  }
+  const family = la.analysis.families[0];
+  const categories = [...new Set([...PROBLEMS.map(p => p.category), 'Arrays', 'DP', 'Graphs', 'Strings', 'Math', 'Sorting', 'Search'])];
+  const chosen = CATEGORY_OF[family] || 'Arrays';
+  const opts = (list, current) => list.map(item => `<option ${item === current ? 'selected' : ''}>${escapeHtml(item)}</option>`).join('');
+  return shell(`<p class="text-xs mute mt-1 mb-3">${percent}% closest overlap, so this looks unrepeated. Test only keeps the pool unchanged; add it to keep it for future checks.</p>
+    <div class="grid sm:grid-cols-2 gap-3 text-sm">
+      <div class="sm:col-span-2"><label class="text-xs mute" for="addt">Title</label><input id="addt" placeholder="e.g. Basket Totals"></div>
+      <div><label class="text-xs mute" for="adds">Section (division or competition)</label><select id="adds">${opts(state.sections, BEGINNERS)}</select></div>
+      <div><label class="text-xs mute" for="adds2">Or a new section</label><input id="adds2" placeholder="e.g. Winter Cup"></div>
+      <div><label class="text-xs mute" for="addc">Category</label><select id="addc">${opts(categories, chosen)}</select></div>
+      <div><label class="text-xs mute" for="addr">Rating</label><input id="addr" type="number" min="800" max="3500" value="1000"></div>
+      <div><label class="text-xs mute" for="addu">Status</label><select id="addu"><option>Unrepeated</option><option>Used</option></select></div>
+      <div><label class="text-xs mute" for="addl">Source link (optional)</label><input id="addl" value="${escapeHtml(la.link || '')}"></div>
+    </div>
+    <div class="flex flex-wrap items-center gap-2 mt-3"><button class="btn" data-add>Add to pool</button><button class="ghost" data-skip>Test only</button><span id="addmsg" class="text-xs" style="color:var(--warn)"></span></div>`);
+}
+
+/* ---- Problem pool ---- */
+
+// Does a problem pass the current filters?
+function passesFilters(problem) {
+  const f = state.poolFilters;
+  const searchable = (problem.title + problem.source + problem.mechanics).toLowerCase();
+  if (!searchable.includes(f.search.toLowerCase())) return false;
+  if (f.category !== 'All' && problem.category !== f.category) return false;
+  if (f.section !== 'All' && problem.section !== f.section) return false;
+  if (f.status !== 'All' && (f.status === 'Used') !== problem.used) return false;
+  if (f.beginnerSafeOnly && !(problem.section === BEGINNERS && problem.rating <= 1200 && !problem.used)) return false;
+  return true;
+}
+
+function renderPool() {
+  const f = state.poolFilters;
+  const categories = ['All', ...new Set(PROBLEMS.map(p => p.category))];
+  const rows = PROBLEMS.filter(passesFilters);
+  const options = (list, current) => list.map(item => `<option ${item === current ? 'selected' : ''}>${item}</option>`).join('');
+
+  byId('v-pool').innerHTML = `<div class="card p-4">
+    <div class="grid sm:grid-cols-5 gap-3 items-end">
+      <div class="sm:col-span-2"><label class="text-xs mute" for="pq">Search title, source or mechanics</label><input id="pq" value="${escapeHtml(f.search)}"></div>
+      <div><label class="text-xs mute" for="pc">Category</label><select id="pc">${options(categories, f.category)}</select></div>
+      <div><label class="text-xs mute" for="ps">Status</label><select id="ps">${options(['All', 'Used', 'Unrepeated'], f.status)}</select></div>
+      <div><label class="text-xs mute" for="pse">Section</label><select id="pse">${options(['All', ...state.sections], f.section)}</select></div>
+    </div>
+    <label class="flex items-center gap-2 text-sm mt-3"><input type="checkbox" id="pb" style="width:auto" ${f.beginnerSafeOnly ? 'checked' : ''}> Show only beginner-safe recommendations (unrepeated, rating ≤ 1200)</label>
+    <div class="scroll-x mt-3"><table class="w-full min-w-[640px]">
+      <thead><tr><th>ID</th><th>Problem</th><th>Source</th><th>Category</th><th>Rating</th><th>Section</th><th>Status</th></tr></thead>
+      <tbody>${rows.map(poolRow).join('') || '<tr><td colspan="7" class="mute">No problems match these filters. Clear a filter to see more.</td></tr>'}</tbody>
+    </table></div>
+    <div class="text-xs mute mt-2">${rows.length} of ${PROBLEMS.length} problems</div></div>`;
+
+  // Typing redraws the table, so put the cursor back where it was.
+  byId('pq').oninput = event => {
+    f.search = event.target.value;
+    renderPool();
+    const box = byId('pq');
+    box.focus();
+    box.setSelectionRange(f.search.length, f.search.length);
+  };
+  byId('pc').onchange = event => { f.category = event.target.value; renderPool(); };
+  byId('ps').onchange = event => { f.status = event.target.value; renderPool(); };
+  byId('pse').onchange = event => { f.section = event.target.value; renderPool(); };
+  byId('pb').onchange = event => { f.beginnerSafeOnly = event.target.checked; renderPool(); };
+}
+
+function poolRow(p) {
+  const statusColor = p.used ? 'var(--warn)' : 'var(--ok)';
+  return `<tr><td class="mono">${p.id}</td><td><button class="text-left underline decoration-dotted" data-p="${p.id}">${escapeHtml(p.title)}</button></td><td class="mute">${p.link ? `<a href="${escapeHtml(p.link)}" target="_blank" rel="noopener" style="color:var(--acc)">${escapeHtml(p.source)}</a>` : escapeHtml(p.source)}</td><td>${p.category}</td><td class="mono">${p.rating}</td><td>${escapeHtml(p.section)}</td>
+    <td><span class="chip" style="color:${statusColor};border-color:currentColor">${p.used ? 'Used' : 'Unrepeated'}</span></td></tr>`;
+}
+
+/* ---- Dashboard ---- */
+
+// Baseline history plus whatever was analysed in this session.
+function currentStats() {
+  const analyses = state.baseline.analyses + state.sessionResults.length;
+  const blocked = state.baseline.blocked + state.sessionResults.filter(r => r.percent >= state.highAt).length;
+  return { analyses, blocked, rate: Math.round(blocked / analyses * 100) };
+}
+
+function renderDashboard() {
+  const stats = currentStats();
+  const perCategory = {};
+  PROBLEMS.forEach(p => { perCategory[p.category] = (perCategory[p.category] || 0) + 1; });
+  const biggest = Math.max(...Object.values(perCategory));
+  const table = (head, rows, extra = '') => `<div class="scroll-x"><table class="w-full ${extra}"><thead><tr>${head.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table></div>`;
+
+  const statCards = [['Problems indexed', PROBLEMS.length], ['Analyses run', stats.analyses], ['Duplicates blocked', stats.blocked], ['Prevention rate', stats.rate + '%']]
+    .map(([label, value]) => `<div class="card p-4"><div class="mute text-xs">${label}</div><div class="mono text-2xl font-semibold mt-1">${value}</div></div>`).join('');
+
+  const categoryBars = Object.entries(perCategory).sort((a, b) => b[1] - a[1]).map(([name, count]) => `<div class="flex items-center gap-2 text-sm py-1">
+      <span class="w-20">${name}</span>
+      <div class="flex-1 h-3 rounded" style="background:var(--line)"><div class="h-3 rounded" style="width:${count / biggest * 100}%;background:var(--acc)"></div></div>
+      <span class="mono w-6 text-right">${count}</span></div>`).join('');
+
+  const coordinatorRows = state.coordinators.map(([name, term, added, blocked]) =>
+    `<tr><td>${name}</td><td class="mono">${term}</td><td class="mono">${added}</td><td class="mono">${blocked}</td></tr>`).join('');
+  const logRows = state.auditLog.slice(0, 10).map(row =>
+    `<tr>${row.map((cell, i) => `<td class="${i === 0 ? 'mono' : ''}">${escapeHtml(cell)}</td>`).join('')}</tr>`).join('');
+
+  byId('v-dash').innerHTML = `<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">${statCards}</div>
+    <div class="grid lg:grid-cols-2 gap-4 mt-4">
+      <div class="card p-4"><h3 class="font-medium mb-3">Category distribution</h3>${categoryBars}
+        <div class="text-xs mute mt-2">${PROBLEMS.filter(p => p.used).length} used · ${PROBLEMS.filter(p => !p.used).length} unrepeated</div></div>
+      <div class="card p-4"><h3 class="font-medium mb-3">Coordinator turnover</h3>${table(['Coordinator', 'Term', 'Added', 'Blocked'], coordinatorRows)}
+        <p class="text-xs mute mt-2">Each handoff inherits the full repository, so a new coordinator sees every earlier problem.</p></div>
+    </div>
+    <div class="card p-4 mt-4">
+      <div class="flex flex-wrap justify-between items-center gap-2 mb-2"><h3 class="font-medium">Audit log</h3><button class="btn" id="exp">Export safety report</button></div>
+      ${table(['Date', 'Coordinator', 'Action', 'Item', 'Outcome'], logRows, 'min-w-[520px]')}</div>`;
+
+  byId('exp').onclick = showReport;
+}
+
+/* ---- Safety report dialog ---- */
+
+function showReport() {
+  const stats = currentStats();
+  const lines = [
+    'ALGOGUARD AI — CONTEST PROBLEM SET SAFETY REPORT',
+    'Generated: ' + new Date().toISOString().slice(0, 10),
+    '',
+    `Thresholds: partial overlap ≥ ${state.warnAt}%, high risk ≥ ${state.highAt}%`,
+    `Repository: ${PROBLEMS.length} problems (${PROBLEMS.filter(p => p.used).length} used, ${PROBLEMS.filter(p => !p.used).length} unrepeated)`,
+    `Duplicates blocked: ${stats.blocked} of ${stats.analyses} analyses (${stats.rate}%)`,
+    '',
+    'Candidates analysed this session:'
+  ];
+  if (!state.sessionResults.length) lines.push('  none yet — run an analysis in the inspector');
+  state.sessionResults.forEach((result, i) => {
+    lines.push(`  ${i + 1}. "${result.title}" — ${result.percent}% ${riskLevel(result.percent).label}; nearest: ${result.match.title} (${result.match.source})`);
+  });
+
+  const highRisk = state.sessionResults.filter(r => r.percent >= state.highAt).length;
+  lines.push('', 'Verdict: ' + (highRisk ? highRisk + ' candidate(s) need replacement before the set is published.'
+                                : state.sessionResults.length ? 'No high-risk duplicates in this session.' : 'Nothing to assess.'));
+
+  byId('rep').textContent = lines.join('\n');
+  byId('mmsg').textContent = '';
+  byId('modal').hidden = false;
+  byId('mclose').focus();
+}
+
+
+/* ===== 5. START ====================================================== */
+
+byId('mclose').onclick = () => { byId('modal').hidden = true; };
+byId('mcopy').onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(byId('rep').textContent);
+    byId('mmsg').textContent = 'Copied.';
+  } catch (error) {
+    byId('mmsg').textContent = 'Copy blocked. Select the text and copy manually.';
+  }
+};
+// Open a stored problem: title, details, full statement and its indexed mechanics.
+function openProblem(id) {
+  const p = PROBLEMS.find(item => item.id === id);
+  if (!p) return;
+  byId('ptitle').textContent = p.title;
+  byId('pmeta').textContent = `${p.source} · ${p.year} · ${p.section} · ${p.category} · rating ${p.rating} · ${p.used ? 'used' : 'unrepeated'}`;
+  byId('pstmt').textContent = STATEMENTS[id];
+  byId('pmech').textContent = p.mechanics;
+  state.removeArm = null;
+  byId('pextra').innerHTML = (p.link ? `<a href="${escapeHtml(p.link)}" target="_blank" rel="noopener" style="color:var(--acc)">Open original problem</a>` : '')
+    + (p.added ? `<button class="ghost" data-rm="${p.id}">Remove from pool</button>` : '');
+  byId('pmodal').hidden = false;
+  byId('pclose').focus();
+}
+byId('pclose').onclick = () => { byId('pmodal').hidden = true; };
+document.addEventListener('click', event => {
+  const trigger = event.target.closest('[data-p]');
+  if (trigger) openProblem(trigger.dataset.p);
+  if (event.target === byId('pmodal')) byId('pmodal').hidden = true;   // click on backdrop
+});
+document.addEventListener('click', event => {
+  if (event.target.closest('[data-add]')) addToPool();
+  if (event.target.closest('[data-skip]')) { state.lastAnalysis.skipped = true; renderResults(); }
+  if (event.target.closest('[data-reopen]')) { state.lastAnalysis.skipped = false; renderResults(); }
+  const remove = event.target.closest('[data-rm]');
+  if (remove) {                                   // two clicks, so a slip cannot delete a problem
+    if (state.removeArm === remove.dataset.rm) removeAdded(remove.dataset.rm);
+    else { state.removeArm = remove.dataset.rm; remove.textContent = 'Click again to confirm'; }
+  }
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') { byId('modal').hidden = true; byId('pmodal').hidden = true; }
+});
+
+showTab('inspect');
+</script>
+</body>
+</html>
